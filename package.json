@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Educational proxy project",
   "main": "proxy.js",
+  "dependencies": {
+    "ws": "^8.0.0"
+  },
   "scripts": {
     "start": "node proxy.js"
   }
