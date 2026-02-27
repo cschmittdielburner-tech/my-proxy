@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Educational proxy project",
   "main": "proxy.js",
+  "dependencies": {
+    "puppeteer": "^21.0.0"
+  },
   "scripts": {
     "start": "node proxy.js"
   }
