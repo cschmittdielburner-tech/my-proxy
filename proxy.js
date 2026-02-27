@@ -1,32 +1,26 @@
 const http = require('http');
 const url = require('url');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 
 const MY_SECRET_KEY = "StudyHard2026";
 const PORT = process.env.PORT || 3000;
 
 let browser;
 
-// Launch browser once and reuse it
 async function getBrowser() {
     if (!browser || !browser.isConnected()) {
         browser = await puppeteer.launch({
-            headless: 'new',
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--disable-web-security',        // allow cross-origin requests
-                '--disable-features=IsolateOrigins,site-per-process'
-            ]
+            args: chromium.args,
+            defaultViewport: chromium.defaultViewport,
+            executablePath: await chromium.executablePath(),
+            headless: chromium.headless,
         });
         console.log('Browser launched');
     }
     return browser;
 }
 
-// Serve the control UI when no URL is provided
 function serveUI(res) {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(`
@@ -58,7 +52,7 @@ function serveUI(res) {
             const targetUrl = document.getElementById('urlInput').value;
             const key = document.getElementById('keyInput').value;
             if (!targetUrl || !key) return alert('Enter a URL and key');
-            document.getElementById('status').textContent = 'Loading... (first load may take 10-20 seconds)';
+            document.getElementById('status').textContent = 'Loading... (first load may take 20-30 seconds)';
             document.getElementById('display').src = '/load?url=' + encodeURIComponent(targetUrl) + '&key=' + encodeURIComponent(key);
             document.getElementById('display').onload = () => {
                 document.getElementById('status').textContent = 'Loaded: ' + targetUrl;
@@ -72,27 +66,18 @@ function serveUI(res) {
 
 async function handleRequest(req, res) {
     const parsed = url.parse(req.url, true);
-    const pathname = parsed.pathname;
     const query = parsed.query;
-
-    // Serve UI at root
-    if (pathname === '/' && !query.url) {
-        serveUI(res);
-        return;
-    }
-
     const userKey = query.key;
     const targetUrl = query.url;
 
-    // Auth check
-    if (userKey !== MY_SECRET_KEY) {
-        res.writeHead(401, { 'Content-Type': 'text/plain' });
-        res.end('ACCESS DENIED');
+    if (!targetUrl) {
+        serveUI(res);
         return;
     }
 
-    if (!targetUrl) {
-        serveUI(res);
+    if (userKey !== MY_SECRET_KEY) {
+        res.writeHead(401);
+        res.end('ACCESS DENIED');
         return;
     }
 
@@ -102,66 +87,46 @@ async function handleRequest(req, res) {
         const b = await getBrowser();
         page = await b.newPage();
 
-        // Pretend to be a real browser
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-        // Set viewport to full size
         await page.setViewport({ width: 1280, height: 800 });
 
-        // Navigate and wait for the page to fully load
         await page.goto(targetUrl, {
             waitUntil: 'networkidle2',
             timeout: 30000
         });
 
-        // Wait a little extra for JS-heavy sites and games
         await new Promise(r => setTimeout(r, 2000));
 
-        // Get the fully rendered HTML after JS has run
         const content = await page.content();
+        console.log(`Done: ${page.url()}`);
 
-        // Take a screenshot as a fallback check
-        const pageUrl = page.url();
-        console.log(`Loaded: ${pageUrl}`);
-
-        res.writeHead(200, {
-            'Content-Type': 'text/html',
-            'X-Proxied-Url': pageUrl
-        });
+        res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(content);
 
     } catch (err) {
         console.error('Error:', err.message);
         res.writeHead(500, { 'Content-Type': 'text/html' });
-        res.end(`
-            <html><body style="background:#111;color:red;font-family:monospace;padding:20px;">
-                <h2>Error loading page</h2>
-                <p>${err.message}</p>
-                <p>Try a different URL or check that it's reachable.</p>
-            </body></html>
-        `);
+        res.end(`<html><body style="background:#111;color:red;font-family:monospace;padding:20px;">
+            <h2>Error loading page</h2><p>${err.message}</p>
+        </body></html>`);
     } finally {
-        if (page) {
-            await page.close().catch(() => {});
-        }
+        if (page) await page.close().catch(() => {});
     }
 }
 
 const server = http.createServer((req, res) => {
     handleRequest(req, res).catch(err => {
-        console.error('Unhandled error:', err);
         res.writeHead(500);
         res.end('Server error: ' + err.message);
     });
 });
 
 server.listen(PORT, async () => {
-    console.log(`Puppeteer proxy running on port ${PORT}`);
-    // Pre-warm the browser so the first request is faster
+    console.log(`Proxy running on port ${PORT}`);
     try {
         await getBrowser();
-        console.log('Browser ready and waiting');
+        console.log('Browser ready');
     } catch (e) {
-        console.error('Failed to pre-warm browser:', e.message);
+        console.error('Browser pre-warm failed:', e.message);
     }
 });
