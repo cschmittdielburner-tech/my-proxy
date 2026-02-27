@@ -104,7 +104,11 @@ function handleHttp(req, res) {
         res.end("Proxy error: " + err.message);
     });
 
-    req.pipe(proxyReq);
+    if (req.method === "POST" || req.method === "PUT" || req.method === "PATCH") {
+        req.pipe(proxyReq);
+    } else {
+        proxyReq.end();
+    }
 }
 
 function handleWebSocket(req, socket, head) {
