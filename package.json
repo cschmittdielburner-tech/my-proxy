@@ -1,0 +1,12 @@
+{
+  "name": "study-proxy-server",
+  "version": "1.0.0",
+  "description": "Educational proxy project",
+  "main": "proxy.js",
+  "dependencies": {
+    "http-proxy": "^1.18.1"
+  },
+  "scripts": {
+    "start": "node proxy.js"
+  }
+}
