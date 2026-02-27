@@ -2,7 +2,6 @@ const http = require('http');
 const https = require('https');
 const url = require('url');
 const zlib = require('zlib');
-const WebSocket = require('ws');
 const net = require('net');
 
 const MY_SECRET_KEY = "StudyHard2026";
