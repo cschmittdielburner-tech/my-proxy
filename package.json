@@ -4,7 +4,8 @@
   "description": "Educational proxy project",
   "main": "proxy.js",
   "dependencies": {
-    "puppeteer": "^24.0.0"
+    "puppeteer-core": "^21.0.0",
+    "@sparticuz/chromium": "^119.0.0"
   },
   "scripts": {
     "start": "node proxy.js"
