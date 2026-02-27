@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Secure Game Hub Proxy</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: #1a1a1a; color: #00ff41; font-family: monospace; display: flex; flex-direction: column; height: 100vh; }
+        .nav { padding: 10px; background: #000; display: flex; gap: 8px; border-bottom: 2px solid #00ff41; align-items: center; }
+        #urlInput { flex-grow: 1; background: #222; color: #fff; border: 1px solid #444; padding: 8px; border-radius: 4px; font-size: 14px; }
+        #keyInput { width: 160px; background: #222; color: #fff; border: 1px solid #444; padding: 8px; border-radius: 4px; font-size: 14px; }
+        button { background: #00ff41; color: #000; border: none; padding: 8px 18px; cursor: pointer; font-weight: bold; border-radius: 4px; font-size: 14px; }
+        button:hover { background: #00cc33; }
+        #display { flex-grow: 1; border: none; background: #fff; }
+        .status { font-size: 12px; color: #888; padding: 0 6px; white-space: nowrap; }
+    </style>
+</head>
+<body>
+    <div class="nav">
+        <input type="text" id="urlInput" placeholder="Enter URL (https://...)">
+        <input type="password" id="keyInput" placeholder="Secret Key">
+        <button onclick="launch()">Launch</button>
+        <span class="status" id="status"></span>
+    </div>
+    <iframe id="display" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+
+    <script>
+        // *** UPDATE THIS to your Render URL ***
+        const PROXY_BASE = "https://believable-optimism-production-d90f.up.railway.app";
+
+        function launch() {
+            const targetUrl = document.getElementById('urlInput').value.trim();
+            const key = document.getElementById('keyInput').value.trim();
+
+            if (!targetUrl) {
+                alert("Please enter a URL");
+                return;
+            }
+
+            if (!key) {
+                alert("Please enter your secret key");
+                return;
+            }
+
+            // Add https:// if user forgot it
+            const fullUrl = targetUrl.startsWith('http') ? targetUrl : 'https://' + targetUrl;
+
+            document.getElementById('status').textContent = 'Loading...';
+            const finalUrl = `${PROXY_BASE}/?url=${encodeURIComponent(fullUrl)}&key=${encodeURIComponent(key)}`;
+            document.getElementById('display').src = finalUrl;
+        }
+
+        // Allow pressing Enter to launch
+        document.getElementById('urlInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') launch();
+        });
+
+        document.getElementById('display').addEventListener('load', () => {
+            document.getElementById('status').textContent = 'Done';
+        });
+    </script>
+</body>
+</html>
