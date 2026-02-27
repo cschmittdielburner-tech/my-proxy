@@ -31,7 +31,9 @@ http.createServer((req, res) => {
         method: req.method,
         headers: {
             ...req.headers,
-            host: parsed.hostname
+            host: parsed.hostname,
+            // Tell the server we accept all encodings so we can decompress
+            'accept-encoding': 'gzip, deflate, br'
         }
     };
 
@@ -39,12 +41,14 @@ http.createServer((req, res) => {
 
     const proxyReq = protocol.request(options, (proxyRes) => {
         const encoding = proxyRes.headers['content-encoding'];
+        const contentType = proxyRes.headers['content-type'] || '';
 
         // Strip security and encoding headers
         const headers = { ...proxyRes.headers };
         delete headers['content-security-policy'];
         delete headers['x-frame-options'];
         delete headers['content-encoding'];
+        delete headers['content-length']; // we'll change the body so length will be wrong
 
         res.writeHead(proxyRes.statusCode, headers);
 
@@ -58,15 +62,23 @@ http.createServer((req, res) => {
             stream = proxyRes.pipe(zlib.createBrotliDecompress());
         }
 
-        let body = '';
-        stream.on('data', chunk => body += chunk);
+        // Collect chunks as buffers to avoid corrupting binary data
+        const chunks = [];
+        stream.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
         stream.on('end', () => {
-            if (headers['content-type'] && headers['content-type'].includes('text/html')) {
+            const buffer = Buffer.concat(chunks);
+
+            // Only rewrite HTML content
+            if (contentType.includes('text/html')) {
+                let body = buffer.toString('utf8');
                 const base = `${parsed.protocol}//${parsed.hostname}`;
                 body = body.replace(/href="\/([^"]*?)"/g, `href="/?url=${base}/$1&key=${MY_SECRET_KEY}"`);
                 body = body.replace(/src="\/([^"]*?)"/g, `src="/?url=${base}/$1&key=${MY_SECRET_KEY}"`);
+                res.end(body);
+            } else {
+                // Send binary data (images, fonts, etc.) as-is
+                res.end(buffer);
             }
-            res.end(body);
         });
 
         stream.on('error', (err) => {
