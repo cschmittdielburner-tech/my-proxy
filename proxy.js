@@ -5,7 +5,7 @@ const url = require('url');
 const proxy = httpProxy.createProxyServer({});
 
 // CHANGE THIS: This is your secret access key
-const MY_SECRET_KEY = "StudyHard2026";
+const MY_SECRET_KEY = "donal2026";
 
 const server = http.createServer((req, res) => {
     const parsed = url.parse(req.url, true);
