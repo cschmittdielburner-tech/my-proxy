@@ -32,7 +32,6 @@ http.createServer((req, res) => {
         headers: {
             ...req.headers,
             host: parsed.hostname,
-            // Tell the server we accept all encodings so we can decompress
             'accept-encoding': 'gzip, deflate, br'
         }
     };
@@ -48,7 +47,7 @@ http.createServer((req, res) => {
         delete headers['content-security-policy'];
         delete headers['x-frame-options'];
         delete headers['content-encoding'];
-        delete headers['content-length']; // we'll change the body so length will be wrong
+        delete headers['content-length'];
 
         res.writeHead(proxyRes.statusCode, headers);
 
@@ -62,18 +61,32 @@ http.createServer((req, res) => {
             stream = proxyRes.pipe(zlib.createBrotliDecompress());
         }
 
-        // Collect chunks as buffers to avoid corrupting binary data
+        // Collect chunks as buffers
         const chunks = [];
         stream.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
         stream.on('end', () => {
             const buffer = Buffer.concat(chunks);
 
-            // Only rewrite HTML content
             if (contentType.includes('text/html')) {
                 let body = buffer.toString('utf8');
                 const base = `${parsed.protocol}//${parsed.hostname}`;
-                body = body.replace(/href="\/([^"]*?)"/g, `href="/?url=${base}/$1&key=${MY_SECRET_KEY}"`);
-                body = body.replace(/src="\/([^"]*?)"/g, `src="/?url=${base}/$1&key=${MY_SECRET_KEY}"`);
+                const key = `&key=${MY_SECRET_KEY}`;
+
+                // Rewrite absolute URLs (https://example.com/path)
+                body = body.replace(/href="(https?:\/\/[^"]+)"/g, (_, u) => `href="/?url=${encodeURIComponent(u)}${key}"`);
+                body = body.replace(/src="(https?:\/\/[^"]+)"/g, (_, u) => `src="/?url=${encodeURIComponent(u)}${key}"`);
+                body = body.replace(/action="(https?:\/\/[^"]+)"/g, (_, u) => `action="/?url=${encodeURIComponent(u)}${key}"`);
+
+                // Rewrite root-relative URLs (/path)
+                body = body.replace(/href="\//g, `href="/?url=${encodeURIComponent(base + '/')}${key}&p=`);
+                body = body.replace(/src="\//g, `src="/?url=${encodeURIComponent(base + '/')}${key}&p=`);
+
+                // Rewrite srcset attributes (used for responsive images)
+                body = body.replace(/srcset="([^"]+)"/g, (_, srcset) => {
+                    const rewritten = srcset.replace(/(https?:\/\/[^\s,]+)/g, (u) => `/?url=${encodeURIComponent(u)}${key}`);
+                    return `srcset="${rewritten}"`;
+                });
+
                 res.end(body);
             } else {
                 // Send binary data (images, fonts, etc.) as-is
