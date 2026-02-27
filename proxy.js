@@ -1,22 +1,30 @@
 const http = require('http');
 const url = require('url');
 const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
 
 const MY_SECRET_KEY = "StudyHard2026";
 const PORT = process.env.PORT || 3000;
+
+// Use the system Chrome installed by the Dockerfile
+const CHROME_PATH = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
 
 let browser;
 
 async function getBrowser() {
     if (!browser || !browser.isConnected()) {
         browser = await puppeteer.launch({
-            args: chromium.args,
-            defaultViewport: chromium.defaultViewport,
-            executablePath: await chromium.executablePath(),
-            headless: chromium.headless,
+            executablePath: CHROME_PATH,
+            headless: 'new',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process'
+            ]
         });
-        console.log('Browser launched');
+        console.log('Browser launched from: ' + CHROME_PATH);
     }
     return browser;
 }
@@ -52,8 +60,8 @@ function serveUI(res) {
             const targetUrl = document.getElementById('urlInput').value;
             const key = document.getElementById('keyInput').value;
             if (!targetUrl || !key) return alert('Enter a URL and key');
-            document.getElementById('status').textContent = 'Loading... (first load may take 20-30 seconds)';
-            document.getElementById('display').src = '/load?url=' + encodeURIComponent(targetUrl) + '&key=' + encodeURIComponent(key);
+            document.getElementById('status').textContent = 'Loading... (may take 20-30 seconds)';
+            document.getElementById('display').src = '/?url=' + encodeURIComponent(targetUrl) + '&key=' + encodeURIComponent(key);
             document.getElementById('display').onload = () => {
                 document.getElementById('status').textContent = 'Loaded: ' + targetUrl;
             };
@@ -65,8 +73,7 @@ function serveUI(res) {
 }
 
 async function handleRequest(req, res) {
-    const parsed = url.parse(req.url, true);
-    const query = parsed.query;
+    const query = url.parse(req.url, true).query;
     const userKey = query.key;
     const targetUrl = query.url;
 
@@ -95,6 +102,7 @@ async function handleRequest(req, res) {
             timeout: 30000
         });
 
+        // Extra wait for JS-heavy sites
         await new Promise(r => setTimeout(r, 2000));
 
         const content = await page.content();
