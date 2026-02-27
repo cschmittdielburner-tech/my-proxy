@@ -1,195 +1,167 @@
 const http = require('http');
-const https = require('https');
 const url = require('url');
-const zlib = require('zlib');
-const net = require('net');
+const puppeteer = require('puppeteer');
 
 const MY_SECRET_KEY = "StudyHard2026";
 const PORT = process.env.PORT || 3000;
 
-// ─── URL Rewriting ────────────────────────────────────────────────────────────
+let browser;
 
-function rewriteUrls(body, base, contentType, key) {
-    if (contentType.includes('text/html')) {
-        // Absolute URLs
-        body = body.replace(/href="(https?:\/\/[^"]+)"/g, (_, u) => `href="/?url=${encodeURIComponent(u)}&key=${key}"`);
-        body = body.replace(/src="(https?:\/\/[^"]+)"/g, (_, u) => `src="/?url=${encodeURIComponent(u)}&key=${key}"`);
-        body = body.replace(/action="(https?:\/\/[^"]+)"/g, (_, u) => `action="/?url=${encodeURIComponent(u)}&key=${key}"`);
-
-        // Root-relative URLs
-        body = body.replace(/href="(\/[^"]*?)"/g, (_, path) => `href="/?url=${encodeURIComponent(base + path)}&key=${key}"`);
-        body = body.replace(/src="(\/[^"]*?)"/g, (_, path) => `src="/?url=${encodeURIComponent(base + path)}&key=${key}"`);
-
-        // Srcset
-        body = body.replace(/srcset="([^"]+)"/g, (_, srcset) => {
-            const rewritten = srcset.replace(/(https?:\/\/[^\s,]+)/g, (u) => `/?url=${encodeURIComponent(u)}&key=${key}`);
-            return `srcset="${rewritten}"`;
+// Launch browser once and reuse it
+async function getBrowser() {
+    if (!browser || !browser.isConnected()) {
+        browser = await puppeteer.launch({
+            headless: 'new',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-web-security',        // allow cross-origin requests
+                '--disable-features=IsolateOrigins,site-per-process'
+            ]
         });
-
-        // Rewrite WebSocket URLs in inline scripts (ws:// and wss://)
-        body = body.replace(/(["'`])(wss?:\/\/[^"'`\s]+)(["'`])/g, (_, q1, wsUrl, q2) => {
-            const rewritten = wsUrl.replace('wss://', 'wss://').replace('ws://', 'ws://');
-            return `${q1}${rewritten}${q2}`;
-        });
-
-        // Inject a base tag so relative URLs resolve correctly
-        body = body.replace(/<head>/i, `<head><base href="${base}/">`);
+        console.log('Browser launched');
     }
-
-    if (contentType.includes('text/css')) {
-        body = body.replace(/url\(['"]?(https?:\/\/[^'"\)]+)['"]?\)/g, (_, u) => `url(/?url=${encodeURIComponent(u)}&key=${key})`);
-        body = body.replace(/url\(['"]?(\/[^'"\)]+)['"]?\)/g, (_, path) => `url(/?url=${encodeURIComponent(base + path)}&key=${key})`);
-    }
-
-    return body;
+    return browser;
 }
 
-// ─── HTTP Proxy ───────────────────────────────────────────────────────────────
-
-function handleHttp(req, res) {
-    const query = url.parse(req.url, true).query;
-    const userKey = query.key;
-    const targetUrl = query.url;
-
-    if (userKey !== MY_SECRET_KEY) {
-        res.writeHead(401);
-        res.end("ACCESS DENIED");
-        return;
-    }
-
-    if (!targetUrl) {
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end("No URL provided");
-        return;
-    }
-
-    const parsed = url.parse(targetUrl);
-    const protocol = parsed.protocol === 'https:' ? https : http;
-    const base = `${parsed.protocol}//${parsed.hostname}`;
-
-    const options = {
-        hostname: parsed.hostname,
-        path: parsed.path || '/',
-        method: req.method,
-        headers: {
-            ...req.headers,
-            host: parsed.hostname,
-            'accept-encoding': 'gzip, deflate, br'
+// Serve the control UI when no URL is provided
+function serveUI(res) {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Proxy</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: #111; color: #00ff41; font-family: monospace; display: flex; flex-direction: column; height: 100vh; }
+        .bar { padding: 12px; background: #000; display: flex; gap: 8px; border-bottom: 2px solid #00ff41; }
+        input { background: #222; color: #fff; border: 1px solid #444; padding: 8px; border-radius: 4px; font-size: 14px; }
+        #urlInput { flex-grow: 1; }
+        button { background: #00ff41; color: #000; border: none; padding: 8px 16px; cursor: pointer; font-weight: bold; border-radius: 4px; }
+        iframe { flex-grow: 1; border: none; background: #fff; }
+        #status { padding: 6px 12px; background: #222; font-size: 12px; color: #888; }
+    </style>
+</head>
+<body>
+    <div class="bar">
+        <input type="text" id="urlInput" placeholder="Enter URL (https://...)" />
+        <input type="password" id="keyInput" placeholder="Secret Key" />
+        <button onclick="launch()">Launch</button>
+    </div>
+    <div id="status">Ready</div>
+    <iframe id="display"></iframe>
+    <script>
+        function launch() {
+            const targetUrl = document.getElementById('urlInput').value;
+            const key = document.getElementById('keyInput').value;
+            if (!targetUrl || !key) return alert('Enter a URL and key');
+            document.getElementById('status').textContent = 'Loading... (first load may take 10-20 seconds)';
+            document.getElementById('display').src = '/load?url=' + encodeURIComponent(targetUrl) + '&key=' + encodeURIComponent(key);
+            document.getElementById('display').onload = () => {
+                document.getElementById('status').textContent = 'Loaded: ' + targetUrl;
+            };
         }
-    };
-
-    // Clean up headers that can cause issues
-    delete options.headers['x-forwarded-for'];
-    delete options.headers['origin'];
-    delete options.headers['referer'];
-
-    const proxyReq = protocol.request(options, (proxyRes) => {
-        const encoding = proxyRes.headers['content-encoding'];
-        const contentType = proxyRes.headers['content-type'] || '';
-
-        const headers = { ...proxyRes.headers };
-        delete headers['content-security-policy'];
-        delete headers['x-frame-options'];
-        delete headers['content-encoding'];
-        delete headers['content-length'];
-        // Allow cross-origin requests for games and assets
-        headers['access-control-allow-origin'] = '*';
-
-        res.writeHead(proxyRes.statusCode, headers);
-
-        let stream = proxyRes;
-        if (encoding === 'gzip') stream = proxyRes.pipe(zlib.createGunzip());
-        else if (encoding === 'deflate') stream = proxyRes.pipe(zlib.createInflate());
-        else if (encoding === 'br') stream = proxyRes.pipe(zlib.createBrotliDecompress());
-
-        const chunks = [];
-        stream.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-        stream.on('end', () => {
-            const buffer = Buffer.concat(chunks);
-
-            if (contentType.includes('text/html') || contentType.includes('text/css')) {
-                let body = buffer.toString('utf8');
-                body = rewriteUrls(body, base, contentType, MY_SECRET_KEY);
-                res.end(body);
-            } else {
-                res.end(buffer);
-            }
-        });
-
-        stream.on('error', err => res.end("Decompression error: " + err.message));
-    });
-
-    proxyReq.on('error', err => {
-        res.writeHead(500);
-        res.end("Proxy error: " + err.message);
-    });
-
-    // Forward request body (for POST requests)
-    req.pipe(proxyReq);
+    </script>
+</body>
+</html>
+    `);
 }
 
-// ─── WebSocket Proxy ──────────────────────────────────────────────────────────
+async function handleRequest(req, res) {
+    const parsed = url.parse(req.url, true);
+    const pathname = parsed.pathname;
+    const query = parsed.query;
 
-function handleWebSocket(req, socket, head) {
-    const query = url.parse(req.url, true).query;
+    // Serve UI at root
+    if (pathname === '/' && !query.url) {
+        serveUI(res);
+        return;
+    }
+
     const userKey = query.key;
     const targetUrl = query.url;
 
+    // Auth check
     if (userKey !== MY_SECRET_KEY) {
-        socket.destroy();
+        res.writeHead(401, { 'Content-Type': 'text/plain' });
+        res.end('ACCESS DENIED');
         return;
     }
 
     if (!targetUrl) {
-        socket.destroy();
+        serveUI(res);
         return;
     }
 
-    // Convert http/https to ws/wss
-    const wsUrl = targetUrl.replace(/^http/, 'ws');
-    const parsed = url.parse(wsUrl);
-    const isSecure = parsed.protocol === 'wss:';
-    const port = parsed.port || (isSecure ? 443 : 80);
+    let page;
+    try {
+        console.log(`Loading: ${targetUrl}`);
+        const b = await getBrowser();
+        page = await b.newPage();
 
-    // Create a raw TCP connection to the target WebSocket server
-    const targetSocket = net.connect(port, parsed.hostname, () => {
-        // Forward the upgrade request
-        const upgradeReq = [
-            `GET ${parsed.path || '/'} HTTP/1.1`,
-            `Host: ${parsed.hostname}`,
-            `Upgrade: websocket`,
-            `Connection: Upgrade`,
-            `Sec-WebSocket-Key: ${req.headers['sec-websocket-key'] || ''}`,
-            `Sec-WebSocket-Version: ${req.headers['sec-websocket-version'] || '13'}`,
-            '',
-            ''
-        ].join('\r\n');
+        // Pretend to be a real browser
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-        targetSocket.write(upgradeReq);
-    });
+        // Set viewport to full size
+        await page.setViewport({ width: 1280, height: 800 });
 
-    // Pipe data between client and target
-    targetSocket.on('data', data => socket.write(data));
-    socket.on('data', data => targetSocket.write(data));
+        // Navigate and wait for the page to fully load
+        await page.goto(targetUrl, {
+            waitUntil: 'networkidle2',
+            timeout: 30000
+        });
 
-    targetSocket.on('end', () => socket.end());
-    socket.on('end', () => targetSocket.end());
+        // Wait a little extra for JS-heavy sites and games
+        await new Promise(r => setTimeout(r, 2000));
 
-    targetSocket.on('error', () => socket.destroy());
-    socket.on('error', () => targetSocket.destroy());
+        // Get the fully rendered HTML after JS has run
+        const content = await page.content();
+
+        // Take a screenshot as a fallback check
+        const pageUrl = page.url();
+        console.log(`Loaded: ${pageUrl}`);
+
+        res.writeHead(200, {
+            'Content-Type': 'text/html',
+            'X-Proxied-Url': pageUrl
+        });
+        res.end(content);
+
+    } catch (err) {
+        console.error('Error:', err.message);
+        res.writeHead(500, { 'Content-Type': 'text/html' });
+        res.end(`
+            <html><body style="background:#111;color:red;font-family:monospace;padding:20px;">
+                <h2>Error loading page</h2>
+                <p>${err.message}</p>
+                <p>Try a different URL or check that it's reachable.</p>
+            </body></html>
+        `);
+    } finally {
+        if (page) {
+            await page.close().catch(() => {});
+        }
+    }
 }
-
-// ─── Server Setup ─────────────────────────────────────────────────────────────
 
 const server = http.createServer((req, res) => {
-    handleHttp(req, res);
+    handleRequest(req, res).catch(err => {
+        console.error('Unhandled error:', err);
+        res.writeHead(500);
+        res.end('Server error: ' + err.message);
+    });
 });
 
-// Attach WebSocket upgrade handler
-server.on('upgrade', (req, socket, head) => {
-    handleWebSocket(req, socket, head);
-});
-
-server.listen(PORT, () => {
-    console.log(`Proxy with WebSocket support running on port ${PORT}`);
+server.listen(PORT, async () => {
+    console.log(`Puppeteer proxy running on port ${PORT}`);
+    // Pre-warm the browser so the first request is faster
+    try {
+        await getBrowser();
+        console.log('Browser ready and waiting');
+    } catch (e) {
+        console.error('Failed to pre-warm browser:', e.message);
+    }
 });
